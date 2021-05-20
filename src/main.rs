@@ -60,6 +60,7 @@ fn main() {
     }
 }
 
+//return false if the RMS level is higher than silence? (keep recording...)
 fn write_input_data<T>(input: &[T]) -> bool
 where
     T: cpal::Sample,
