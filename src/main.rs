@@ -1,78 +1,78 @@
-extern crate cpal;
-use std::process::exit;
+use std::{env::args, path::Path, time::Instant};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal_demo::sound::get_mic_stream;
+use deepspeech::Model;
 
 fn main() {
-    //initialise the host
-    let host = cpal::default_host();
-
-    //choose available device
-    let device = host.default_input_device().expect("no input device found");
-    println!("Input device: {:?}", device.name());
-
-    let config = device
-        .default_input_config()
-        .expect("Failed to get input config");
-    println!("Default input config: {:?} ", config);
-
-    // A flag to indicate that recording is in progress.
-    println!("Listening...");
-
-    let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => device
-            .build_input_stream(
-                &config.into(),
-                move |data, _: &_| match write_input_data::<f32>(data) {
-                    true => exit(1),
-                    false => (),
-                },
-                move |err| {},
-            )
-            .expect("Failed to process stream"),
-
-        cpal::SampleFormat::I16 => device
-            .build_input_stream(
-                &config.into(),
-                move |data, _: &_| match write_input_data::<f32>(data) {
-                    true => exit(1),
-                    false => (),
-                },
-                move |err| {},
-            )
-            .expect("Failed to process stream"),
-        cpal::SampleFormat::U16 => device
-            .build_input_stream(
-                &config.into(),
-                move |data, _: &_| match write_input_data::<f32>(data) {
-                    true => exit(1),
-                    false => (),
-                },
-                move |err| {},
-            )
-            .expect("Failed to process stream"),
+    match get_mic_stream() {
+        Some(data) => transcribe(&data),
+        None => println!("No data"),
     };
-    loop {
-        match stream.play() {
-            Ok(()) => {}
-            Err(err) => eprintln!("Failed to play stream: {}", err),
-        }
-    }
 }
 
-//return false if the RMS level is higher than silence? (keep recording...)
-fn write_input_data<T>(input: &[T]) -> bool
-where
-    T: cpal::Sample,
-{
-    let mut rms: usize = 0;
-    let shorts = input.len() / 2;
-    for elem in 0..shorts {
-        let normal = elem;
-        rms += normal * normal;
+fn transcribe(stream: &Vec<f32>) {
+    let mut sound_buffer: Vec<f32> = vec![];
+    let mut audio_buf: Vec<i16> = Vec::new();
+    sound_buffer.extend(stream);
+    if sound_buffer.len() >= 44100 {
+        for i in stream {
+            audio_buf.push(*i as i16);
+        }
+        let start = Instant::now();
+        let model_dir_str = args().nth(1).expect("Please specify model dir");
+        let dir_path = Path::new(&model_dir_str);
+        let mut graph_name: Box<Path> = dir_path.join("output_graph.pb").into_boxed_path();
+        let mut scorer_name: Option<Box<Path>> = None;
+        //search for model in model dir
+
+        for file in dir_path
+            .read_dir()
+            .expect("Specified model dir is not a dir")
+        {
+            if let Ok(f) = file {
+                let file_path = f.path();
+                if file_path.is_file() {
+                    if let Some(ext) = file_path.extension() {
+                        if ext == "pb" || ext == "pbmm" || ext == "tflite" {
+                            graph_name = file_path.into_boxed_path();
+                        } else if ext == "scorer" {
+                            scorer_name = Some(file_path.into_boxed_path());
+                        }
+                    }
+                }
+            }
+        }
+        let mut m = Model::load_from_files(&graph_name).unwrap();
+        if let Some(scorer) = scorer_name {
+            println!("Using external scorer `{}`", scorer.to_str().unwrap());
+            m.enable_external_scorer(&scorer).unwrap();
+        }
+
+        let initialised_time = Instant::now();
+        println!("Model intialised in {:?}.", initialised_time - start);
+
+        let len_seconds = audio_buf.len() as f64 / 44100 as f64;
+        let decoded_time = Instant::now();
+
+        println!(
+            "Decoding done in {:?}. Sample length {}s. Initiating STT.",
+            decoded_time - initialised_time,
+            len_seconds
+        );
+
+        //Run speech to text algo:
+        let result = m.speech_to_text(&audio_buf).unwrap();
+
+        let text_time = Instant::now();
+
+        let elapsed = text_time - decoded_time;
+
+        let elapsed_f = elapsed.subsec_micros() as f64 / 1_000_000.0 + elapsed.as_secs() as f64;
+        println!(
+            "STT done in {:?}. Real time factor {:.5}",
+            elapsed,
+            elapsed_f / len_seconds
+        );
+        println!("{}", result);
     }
-    rms = rms / shorts; //find square root of right side
-    println!("Listening, rms is {}", rms);
-    if rms < 0.1 {};
-    true
 }
