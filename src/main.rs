@@ -1,10 +1,10 @@
 use std::{env::args, path::Path, time::Instant};
 
-use cpal_demo::sound::get_mic_stream;
+use cpal_demo::sound::get_sound;
 use deepspeech::Model;
 
 fn main() {
-    match get_mic_stream() {
+    match get_sound() {
         Some(data) => transcribe(&data),
         None => println!("No data"),
     };

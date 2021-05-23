@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-pub fn get_mic_stream() -> Option<Vec<f32>> {
+pub fn get_sound() -> Option<Vec<f32>> {
     //initialise the host
     let host = cpal::default_host();
 
@@ -18,7 +18,6 @@ pub fn get_mic_stream() -> Option<Vec<f32>> {
 
     // A flag to indicate that recording is in progress.
     println!("Listening...");
-    let mut start = Instant::now();
 
     let (sound_sender, sound_receiver) = channel();
 
@@ -28,39 +27,40 @@ pub fn get_mic_stream() -> Option<Vec<f32>> {
             move |data: &[f32], _: &_| {
                 sound_sender.send(data.to_owned()).unwrap();
             },
-            move |err| {},
+            move |err| println!("Stream read error: {}", err),
         )
         .expect("Failed to process stream");
     match stream.play() {
         Ok(()) => {}
         Err(err) => eprintln!("Failed to play stream: {}", err),
     }
-    //starting with extend. That 'extends' the collection with the contents of the iterator. If we're creating an empty sound buffer here and extending it with
-    //the sound_receiver.recv(), How's that not the same as cloning sound_recevier as sound buffer?
-    let mut sound_buffer = vec![];
-    loop {
-        sound_buffer.extend(sound_receiver.recv().unwrap());
-        if sound_buffer.len() >= 44100 {
-            let int = sound_buffer.iter().map(|f| (*f * 1000.0) as i32);
-            let max = int.clone().max();
-            let min = int.clone().max();
-            let max = max.expect("Stream Error");
-            let min = min.expect("Stream Error");
-            //what are the mix max values? How would I find the silence values.
-            println!("Max is {}, min is {}", max, min);
 
-            /*Silence detected */
-            if max < 200 && min > -200 {
-                let elapsed = start.elapsed();
-                if elapsed.as_millis() > 2000 {
-                    break;
-                } else {
-                    start = Instant::now();
+    // This indicates when silence in the mic stream starts
+    let mut silence_start = None;
+    let mut sound_from_start_till_silence = vec![];
+
+    // Main loop that gathers sound from mic stream
+    loop {
+        let small_sound_chunk = sound_receiver.recv().unwrap();
+
+        sound_from_start_till_silence.extend(&small_sound_chunk);
+
+        let sound_as_ints = small_sound_chunk.iter().map(|f| (*f * 1000.0) as i32);
+        let max_amplitude = sound_as_ints.clone().max().unwrap_or(0);
+        let min_amplitude = sound_as_ints.clone().min().unwrap_or(0);
+
+        let silence_detected = max_amplitude < 200 && min_amplitude > -200;
+        if silence_detected {
+            match silence_start {
+                // There was no silence before
+                None => silence_start = Some(Instant::now()),
+                // Mic was silent for some time
+                Some(s) => {
+                    if s.elapsed().as_secs_f32() > 2.0 {
+                        return Some(sound_from_start_till_silence);
+                    }
                 }
             }
-            sound_buffer.clear();
         }
     }
-
-    Some(sound_buffer)
 }
